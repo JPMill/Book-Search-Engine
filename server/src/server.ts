@@ -1,5 +1,5 @@
-import express from 'express';
-import { ApolloServer } from 'apollo-server-express';
+import express, { Request, Response } from 'express';
+import { ApolloServer } from '@apollo/server';
 import path from 'path';
 import mongoose from 'mongoose';
 import cors from 'cors';
@@ -7,9 +7,8 @@ import dotenv from 'dotenv';
 
 import typeDefs from './schemas/typeDefs';
 import resolvers from './schemas/resolvers';
-import authMiddleware from './services/auth';
+import { expressMiddleware } from '@apollo/server/express4';
 
-// Load environment variables
 dotenv.config();
 
 const app = express();
@@ -20,34 +19,46 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(cors());
 
-// Serve static assets in production
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client/build')));
-}
+// MongoDB connection
+const db = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI as string, {});
+    console.log('MongoDB connected!');
+  } catch (err) {
+    console.error('Error connecting to MongoDB:', err);
+    process.exit(1);
+  }
+};
 
-// Initialize Apollo Server
+// Apollo Server setup
 const server = new ApolloServer({
   typeDefs,
   resolvers,
-  context: ({ req }) => authMiddleware({ req }),
 });
 
-const startServer = async () => {
+// Start Apollo Server
+const startApolloServer = async () => {
   await server.start();
-  server.applyMiddleware({ app });
+  await db();
 
-  mongoose
-    .connect(process.env.MONGODB_URI || 'mongodb://localhost/googlebooks', {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    })
-    .then(() => {
-      console.log('📚 Connected to MongoDB');
-      app.listen(PORT, () => {
-        console.log(`🚀 Server running on http://localhost:${PORT}${server.graphqlPath}`);
-      });
-    })
-    .catch((err) => console.error('Database connection error:', err));
+  app.use('/graphql', expressMiddleware(server, {
+    context: async ({ req }: { req: Request }) => {
+      const user = req.user || { _id: 'user_id', username: 'user_name' }; 
+      return { req, user };
+    },
+  }));
+
+  if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(path.join(__dirname, '../client/dist')));
+    app.get('*', (_req: Request, res: Response) => {
+      res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+    });
+  }
+
+  app.listen(PORT, () => {
+    console.log(`API server running on port ${PORT}!`);
+    console.log(`Use GraphQL at http://localhost:${PORT}/graphql`);
+  });
 };
 
-startServer();
+startApolloServer();
